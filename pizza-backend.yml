@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pizza-backend-new
+  namespace: default
+  labels:
+    app: pizza-backend-new
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pizza-backend-new
+  template:
+    metadata:
+      name: pizza-backend-new
+      labels:
+        app: pizza-backend-new
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: pizza-backend-new
+          image: gitea.hnatekmar.xyz/algovectra/pizza-backend:0.0.79
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: crust_infer_server
+              value: "http://router.fission.svc.cluster.local/pizza-infer-s3"
+            - name: components_infer_server
+              value: "http://router.fission.svc.cluster.local/components-detector"
+          envFrom:
+            - secretRef:
+                name: config
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pizza-backend-new
+  namespace: default
+spec:
+  selector:
+    app: pizza-backend-new
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pizza-backend-new
+  namespace: default
+  annotations:
+    konghq.com/plugins: "prometheus"
+spec:
+  ingressClassName: kong
+  rules:
+    - host: pizza-checker-api.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pizza-backend
+                port:
+                  number: 3000
