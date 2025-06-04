@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pizza-admin
+  namespace: default
+  labels:
+    app: pizza-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pizza-admin
+  template:
+    metadata:
+      name: pizza-admin
+      labels:
+        app: pizza-admin
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: pizza-admin
+          image: gitea.hnatekmar.xyz/algovectra/pizza-admin:0.0.47
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VITE_BACKEND_URL
+              value: https://pizza-checker-api.algovectra.com/
+          envFrom:
+            - secretRef:
+                name: config
+          ports:
+            - containerPort: 80
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pizza-admin
+  namespace: default
+spec:
+  selector:
+    app: pizza-admin
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pizza-admin
+  namespace: default
+spec:
+  ingressClassName: kong
+  rules:
+    - host: vosime.algovectra.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: pizza-backend-new
+                port:
+                  number: 3000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pizza-admin
+                port:
+                  number: 80
