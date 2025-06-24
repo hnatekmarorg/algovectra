@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      name: web
+      labels:
+        app: web
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: web
+          image: gitea.hnatekmar.xyz/algovectra/web:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: default
+spec:
+  selector:
+    app: web
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: default
+spec:
+  ingressClassName: kong
+  rules:
+    - host: web.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 3000
