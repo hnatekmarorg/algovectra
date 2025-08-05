@@ -20,7 +20,7 @@ spec:
         - name: regcred
       containers:
         - name: web
-          image: gitea.hnatekmar.xyz/algovectra/web:0.1.1
+          image: gitea.hnatekmar.xyz/algovectra/web:0.1.3
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
