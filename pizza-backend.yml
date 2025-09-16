@@ -20,7 +20,7 @@ spec:
         - name: regcred
       containers:
         - name: pizza-backend-new
-          image: gitea.hnatekmar.xyz/algovectra/pizza-backend:v0.0.110
+          image: gitea.hnatekmar.xyz/algovectra/pizza-backend:v0.0.111
           imagePullPolicy: IfNotPresent
           env:
             - name: crust_infer_server
