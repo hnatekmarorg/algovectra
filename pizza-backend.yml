@@ -23,6 +23,8 @@ spec:
           image: gitea.hnatekmar.xyz/algovectra/pizza-backend:v0.0.114
           imagePullPolicy: IfNotPresent
           env:
+            - name: thingsboard_url
+              value: "https://thingsboard.hnatekmar.xyz/"
             - name: crust_infer_server
               value: "http://router.fission.svc.cluster.local/pizza-infer-s3"
             - name: components_infer_server
