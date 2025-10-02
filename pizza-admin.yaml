@@ -20,7 +20,7 @@ spec:
         - name: regcred
       containers:
         - name: pizza-admin
-          image: gitea.hnatekmar.xyz/algovectra/pizza-admin:0.0.5á
+          image: gitea.hnatekmar.xyz/algovectra/pizza-admin:0.0.58
           imagePullPolicy: IfNotPresent
           env:
             - name: VITE_BACKEND_URL
