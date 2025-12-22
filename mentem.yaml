@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mentem
+  namespace: default
+  labels:
+    app: mentem
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mentem
+  template:
+    metadata:
+      name: mentem
+      labels:
+        app: mentem
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: mentem
+          image: gitea.hnatekmar.xyz/algovectra/mentem:v0.0.4
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: config
+          ports:
+            - containerPort: 80
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mentem
+  namespace: default
+spec:
+  selector:
+    app: mentem
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mentem
+  namespace: default
+spec:
+  ingressClassName: kong
+  rules:
+    - host: mentem.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mentem
+                port:
+                  number: 80
