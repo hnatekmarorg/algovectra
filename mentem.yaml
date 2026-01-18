@@ -20,7 +20,7 @@ spec:
         - name: regcred
       containers:
         - name: mentem
-          image: gitea.hnatekmar.xyz/algovectra/mentem:v0.0.14
+          image: gitea.hnatekmar.xyz/algovectra/mentem:v0.1.1
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
