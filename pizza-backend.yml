@@ -71,3 +71,4 @@ spec:
                 name: pizza-backend-new
                 port:
                   number: 3000
+
