@@ -46,8 +46,14 @@ kind: Ingress
 metadata:
   name: web
   namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: kong
+  tls:
+    - hosts:
+        - web.algovectra.com
+      secretName: web-tls-secret
   rules:
     - host: web.algovectra.com
       http:

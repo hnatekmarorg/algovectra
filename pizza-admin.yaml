@@ -52,8 +52,14 @@ kind: Ingress
 metadata:
   name: pizza-admin
   namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: kong
+  tls:
+    - hosts:
+        - vosime.algovectra.com
+      secretName: pizza-admin-tls-secret
   rules:
     - host: vosime.algovectra.com
       http:
