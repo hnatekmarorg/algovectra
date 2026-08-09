@@ -58,8 +58,13 @@ metadata:
   namespace: default
   annotations:
     konghq.com/plugins: "prometheus"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: kong
+  tls:
+    - hosts:
+        - pizza-checker-api.algovectra.com
+      secretName: pizza-backend-tls-secret
   rules:
     - host: pizza-checker-api.algovectra.com
       http:
