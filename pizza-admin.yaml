@@ -17,10 +17,10 @@ spec:
         app: pizza-admin
     spec:
       imagePullSecrets:
-        - name: regcred
+        - name: dockerhub
       containers:
         - name: pizza-admin
-          image: gitea.hnatekmar.xyz/algovectra/pizza-admin:0.0.107
+          image: algovectra/runpod-inference:admin-0.0.110
           imagePullPolicy: IfNotPresent
           env:
             - name: VITE_BACKEND_URL
