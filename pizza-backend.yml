@@ -17,10 +17,10 @@ spec:
         app: pizza-backend-new
     spec:
       imagePullSecrets:
-        - name: regcred
+        - name: dockerhub
       containers:
         - name: pizza-backend-new
-          image: gitea.hnatekmar.xyz/algovectra/pizza-backend:v0.0.258
+          image: algovectra/runpod-inference:be-v0.0.260
           imagePullPolicy: IfNotPresent
           env:
             - name: thingsboard_url
