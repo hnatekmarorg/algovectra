@@ -20,7 +20,7 @@ spec:
         - name: dockerhub
       containers:
         - name: pizza-backend-new
-          image: algovectra/runpod-inference:be-v0.0.260
+          image: algovectra/runpod-inference:be-v0.0.262
           imagePullPolicy: IfNotPresent
           env:
             - name: thingsboard_url
