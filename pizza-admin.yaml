@@ -20,7 +20,7 @@ spec:
         - name: dockerhub
       containers:
         - name: pizza-admin
-          image: algovectra/runpod-inference:admin-0.0.112
+          image: algovectra/runpod-inference:admin-0.0.113
           imagePullPolicy: IfNotPresent
           env:
             - name: VITE_BACKEND_URL
