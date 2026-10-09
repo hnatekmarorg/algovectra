@@ -1,0 +1,1646 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "external-secrets.io/v1",
+      "kind": "ExternalSecret",
+      "metadata": {
+        "name": "pcp-database",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "refreshInterval": "1h",
+        "secretStoreRef": {
+          "name": "local-algovectra",
+          "kind": "ClusterSecretStore"
+        },
+        "target": {
+          "name": "pcp-database",
+          "creationPolicy": "Owner",
+          "template": {
+            "type": "Opaque"
+          }
+        },
+        "data": [
+          {
+            "secretKey": "POSTGRES_PASSWORD",
+            "remoteRef": {
+              "key": "pcp/database",
+              "property": "POSTGRES_PASSWORD"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "external-secrets.io/v1",
+      "kind": "ExternalSecret",
+      "metadata": {
+        "name": "pcp-api",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "refreshInterval": "1h",
+        "secretStoreRef": {
+          "name": "local-algovectra",
+          "kind": "ClusterSecretStore"
+        },
+        "target": {
+          "name": "pcp-api",
+          "creationPolicy": "Owner",
+          "template": {
+            "type": "Opaque"
+          }
+        },
+        "data": [
+          {
+            "secretKey": "DATABASE_URL",
+            "remoteRef": {
+              "key": "pcp/api",
+              "property": "DATABASE_URL"
+            }
+          },
+          {
+            "secretKey": "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON",
+            "remoteRef": {
+              "key": "pcp/api",
+              "property": "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON"
+            }
+          },
+          {
+            "secretKey": "ADMIN_ALLOWLIST_EMAILS",
+            "remoteRef": {
+              "key": "pcp/api",
+              "property": "ADMIN_ALLOWLIST_EMAILS"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "external-secrets.io/v1",
+      "kind": "ExternalSecret",
+      "metadata": {
+        "name": "regcred",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "refreshInterval": "1h",
+        "secretStoreRef": {
+          "name": "local-algovectra",
+          "kind": "ClusterSecretStore"
+        },
+        "target": {
+          "name": "regcred",
+          "creationPolicy": "Owner",
+          "template": {
+            "type": "kubernetes.io/dockerconfigjson"
+          }
+        },
+        "data": [
+          {
+            "secretKey": ".dockerconfigjson",
+            "remoteRef": {
+              "key": "pcp/registry",
+              "property": ".dockerconfigjson"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "pcp-tenant-repos",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "storageClassName": "local-path",
+        "resources": {
+          "requests": {
+            "storage": "10Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-db",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "clusterIP": "None",
+        "selector": {
+          "app": "pcp-db"
+        },
+        "ports": [
+          {
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "pcp-db",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "serviceName": "pcp-db",
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-db"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-db"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "name": "postgres",
+                "image": "docker.io/library/postgres:16-alpine@sha256:3c5c8892d184f738f4fe282d14ddaa613a38f00f4189d2d94725ebe6f2909ddb",
+                "env": [
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "pcp"
+                  },
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "pcp"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "pcp-database",
+                        "key": "POSTGRES_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data/pgdata"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "256Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-U",
+                      "pcp",
+                      "-d",
+                      "pcp"
+                    ]
+                  },
+                  "periodSeconds": 5
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "storageClassName": "local-path",
+              "resources": {
+                "requests": {
+                  "storage": "20Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-api",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-api"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-api"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "api",
+                "image": "ghcr.io/algovectra/pcp-api@sha256:8e5b7ee26b8dd54e201ebeeae34d06c37ce722b3e867df0337cb556441ce6d24",
+                "ports": [
+                  {
+                    "containerPort": 3000
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "256Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/ready",
+                    "port": 3000
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 3000
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "env": [
+                  {
+                    "name": "NODE_ENV",
+                    "value": "production"
+                  },
+                  {
+                    "name": "CORS_ORIGINS",
+                    "value": "https://draftigo.com,https://cms.draftigo.com,https://app.draftigo.com,https://garden.draftigo.com,https://sauna.draftigo.com,https://pool.draftigo.com,https://spa.draftigo.com,https://fence.draftigo.com"
+                  },
+                  {
+                    "name": "PORT",
+                    "value": "3000"
+                  },
+                  {
+                    "name": "PUBLIC_CONFIGURATOR_URL",
+                    "value": "https://app.draftigo.com"
+                  },
+                  {
+                    "name": "TENANT_REPOS_DIR",
+                    "value": "/var/data/tenants"
+                  },
+                  {
+                    "name": "DATABASE_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "pcp-api",
+                        "key": "DATABASE_URL"
+                      }
+                    }
+                  },
+                  {
+                    "name": "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "pcp-api",
+                        "key": "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ADMIN_ALLOWLIST_EMAILS",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "pcp-api",
+                        "key": "ADMIN_ALLOWLIST_EMAILS"
+                      }
+                    }
+                  },
+                  {
+                    "name": "GROQ_API_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "pcp-api",
+                        "key": "GROQ_API_KEY",
+                        "optional": true
+                      }
+                    }
+                  },
+                  {
+                    "name": "SEARCH_API_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "pcp-api",
+                        "key": "SEARCH_API_KEY",
+                        "optional": true
+                      }
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "tenant-repos",
+                    "mountPath": "/var/data/tenants"
+                  }
+                ],
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 3000
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3,
+                  "failureThreshold": 60
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "tenant-repos",
+                "persistentVolumeClaim": {
+                  "claimName": "pcp-tenant-repos"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-api",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-api"
+        },
+        "ports": [
+          {
+            "port": 3000,
+            "targetPort": 3000
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-api",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "api.draftigo.com"
+            ],
+            "secretName": "pcp-api-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "api.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-api",
+                      "port": {
+                        "number": 3000
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-landing",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-landing"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-landing"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "landing",
+                "image": "ghcr.io/algovectra/pcp-landing@sha256:13beb6e068a16749ad1bf928bae61a35d255e5cd7067bffc787133847de8a2c1",
+                "ports": [
+                  {
+                    "containerPort": 80
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 80
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 80
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-landing",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-landing"
+        },
+        "ports": [
+          {
+            "port": 80,
+            "targetPort": 80
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-landing",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "draftigo.com"
+            ],
+            "secretName": "pcp-landing-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-landing",
+                      "port": {
+                        "number": 80
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-cms",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-cms"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-cms"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "cms",
+                "image": "ghcr.io/algovectra/pcp-cms@sha256:717be79530fdcad584ed605994d028263c586867b4a1260443a23a17bb5866ab",
+                "ports": [
+                  {
+                    "containerPort": 80
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 80
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 80
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-cms",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-cms"
+        },
+        "ports": [
+          {
+            "port": 80,
+            "targetPort": 80
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-cms",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "cms.draftigo.com"
+            ],
+            "secretName": "pcp-cms-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "cms.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-cms",
+                      "port": {
+                        "number": 80
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-public",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-public"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-public"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "public",
+                "image": "ghcr.io/algovectra/pcp-public@sha256:e4552b7d1acb0ad086ca16dd0adf7073f4126e92cc742af7f15256b8931eeb85",
+                "ports": [
+                  {
+                    "containerPort": 80
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 80
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 80
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-public",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-public"
+        },
+        "ports": [
+          {
+            "port": 80,
+            "targetPort": 80
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-public",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "app.draftigo.com"
+            ],
+            "secretName": "pcp-public-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "app.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-public",
+                      "port": {
+                        "number": 80
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-garden",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-garden"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-garden"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "garden",
+                "image": "ghcr.io/algovectra/pcp-garden@sha256:b4094c724ac20d67ba00487bf5dd501afdbfbc76215db8fc472ba5b5e67b4de1",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-garden",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-garden"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-garden",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "garden.draftigo.com"
+            ],
+            "secretName": "pcp-garden-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "garden.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-garden",
+                      "port": {
+                        "number": 8080
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-sauna",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-sauna"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-sauna"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "sauna",
+                "image": "ghcr.io/algovectra/pcp-sauna@sha256:d831ff0646b7424b4bd86d157184ef4640721ed9aeb0f91641a52c750b59f017",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-sauna",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-sauna"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-sauna",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "sauna.draftigo.com"
+            ],
+            "secretName": "pcp-sauna-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "sauna.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-sauna",
+                      "port": {
+                        "number": 8080
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-pool",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-pool"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-pool"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "pool",
+                "image": "ghcr.io/algovectra/pcp-pool@sha256:f89fca7063bf1eb277d52980cf3033ac0b67d910dcb235cb95382065ba2c34c0",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-pool",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-pool"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-pool",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "pool.draftigo.com"
+            ],
+            "secretName": "pcp-pool-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "pool.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-pool",
+                      "port": {
+                        "number": 8080
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-spa",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-spa"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-spa"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "spa",
+                "image": "ghcr.io/algovectra/pcp-spa@sha256:a77b59869dafb1988d4a122a561b10d80868110d295fc2ad608bf27f9dc8929d",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-spa",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-spa"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-spa",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "spa.draftigo.com"
+            ],
+            "secretName": "pcp-spa-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "spa.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-spa",
+                      "port": {
+                        "number": 8080
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pcp-fence",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "pcp-fence"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pcp-fence"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "imagePullSecrets": [
+              {
+                "name": "regcred"
+              }
+            ],
+            "containers": [
+              {
+                "name": "fence",
+                "image": "ghcr.io/algovectra/pcp-fence@sha256:7479954bb95b127c5573390ebc9ed7262e334d719c61f895cfd821e8cc36e903",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pcp-fence",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app": "pcp-fence"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "pcp-fence",
+        "namespace": "default",
+        "labels": {
+          "app.kubernetes.io/part-of": "pcp"
+        },
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+        }
+      },
+      "spec": {
+        "ingressClassName": "kong",
+        "tls": [
+          {
+            "hosts": [
+              "fence.draftigo.com"
+            ],
+            "secretName": "pcp-fence-tls"
+          }
+        ],
+        "rules": [
+          {
+            "host": "fence.draftigo.com",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "pcp-fence",
+                      "port": {
+                        "number": 8080
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
