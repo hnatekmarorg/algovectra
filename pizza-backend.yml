@@ -33,8 +33,26 @@ spec:
             - secretRef:
                 name: config
           ports:
-            - containerPort: 3000
+            - name: http
+              containerPort: 3000
               protocol: TCP
+          # All probes hit /health: no auth, no I/O, answered by the event loop itself,
+          # so it fails only when the process cannot serve at all (2026-10-20: a deadlocked
+          # event loop kept accepting connections for 2.5 h). Observed loop lag under load
+          # peaks at ~1.5 s; the timeouts below leave room for that.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30   # up to 300 s to start (BB menu sync, pod pool + CNN warmups)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3    # container restarted after ~30 s of no answer
       restartPolicy: Always
 ---
 apiVersion: v1
