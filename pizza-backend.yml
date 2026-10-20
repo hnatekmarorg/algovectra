@@ -46,13 +46,6 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 30   # up to 300 s to start (BB menu sync, pod pool + CNN warmups)
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 2    # out of the Service after ~10 s -> callers get a fast 503, not a hang
           livenessProbe:
             httpGet:
               path: /health
