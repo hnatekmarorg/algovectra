@@ -1,0 +1,233 @@
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bombastica
+  labels:
+    app.kubernetes.io/part-of: bombastica
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: bombastica-config
+  namespace: bombastica
+  labels:
+    app.kubernetes.io/part-of: bombastica
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: local-algovectra
+    kind: ClusterSecretStore
+  target:
+    name: config
+    creationPolicy: Owner
+  # extract the whole object: the backend consumes it with envFrom, and the key set
+  # (mongo_*, s3_*, jwt_secret, thingsboard_jwt_token, ...) is owned by settings.py
+  dataFrom:
+    - extract:
+        key: bombastica/config
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: bombastica-dockerhub
+  namespace: bombastica
+  labels:
+    app.kubernetes.io/part-of: bombastica
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: local-algovectra
+    kind: ClusterSecretStore
+  target:
+    name: dockerhub
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+  data:
+    - secretKey: .dockerconfigjson
+      remoteRef:
+        key: bombastica/dockerhub
+        property: .dockerconfigjson
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bombastica-backend
+  namespace: bombastica
+  labels:
+    app: bombastica-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bombastica-backend
+  template:
+    metadata:
+      labels:
+        app: bombastica-backend
+    spec:
+      imagePullSecrets:
+        - name: dockerhub
+      containers:
+        - name: bombastica-backend
+          image: algovectra/runpod-inference:be-v0.0.291
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: thingsboard_url
+              value: "https://thingsboard.hnatekmar.xyz/"
+            # the GPU inference functions are cluster-wide, shared with Vosime
+            - name: crust_infer_server
+              value: "http://router.fission.svc.cluster.local/pizza-infer-s3"
+            - name: components_infer_server
+              value: "http://router.fission.svc.cluster.local/components-detector"
+            # recipes and ingredients come from Bombastica's own database
+            # (customers/bombastica, tools/catalog/prod_catalog.sh import bombastica)
+            - name: catalog_source
+              value: "db"
+            # no ordering system: pizzas are picked on station tablets
+            - name: biteberry_enabled
+              value: "false"
+          envFrom:
+            - secretRef:
+                name: config
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          # same probes as the Vosime deployment: /health is answered by the event
+          # loop, so it fails only when the process cannot serve at all
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30   # up to 300 s to start (pod pool + CNN warmups)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bombastica-backend
+  namespace: bombastica
+spec:
+  selector:
+    app: bombastica-backend
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bombastica-backend
+  namespace: bombastica
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - bombastica-api.algovectra.com
+      secretName: bombastica-api-tls
+  rules:
+    - host: bombastica-api.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bombastica-backend
+                port:
+                  number: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bombastica-admin
+  namespace: bombastica
+  labels:
+    app: bombastica-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bombastica-admin
+  template:
+    metadata:
+      labels:
+        app: bombastica-admin
+    spec:
+      imagePullSecrets:
+        - name: dockerhub
+      containers:
+        - name: bombastica-admin
+          image: algovectra/runpod-inference:admin-0.0.130
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VITE_BACKEND_URL
+              value: https://bombastica-api.algovectra.com/
+            - name: BACKEND_URL
+              value: https://bombastica-api.algovectra.com/
+          envFrom:
+            - secretRef:
+                name: config
+          ports:
+            - containerPort: 80
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bombastica-admin
+  namespace: bombastica
+spec:
+  selector:
+    app: bombastica-admin
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bombastica-admin
+  namespace: bombastica
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - bombastica.algovectra.com
+      secretName: bombastica-tls
+  rules:
+    - host: bombastica.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bombastica-admin
+                port:
+                  number: 80
