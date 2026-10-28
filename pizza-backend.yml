@@ -29,6 +29,10 @@ spec:
               value: "http://router.fission.svc.cluster.local/pizza-infer-s3"
             - name: components_infer_server
               value: "http://router.fission.svc.cluster.local/components-detector"
+            # recipes and ingredients from the catalog_* collections (imported with
+            # tools/catalog/manage_catalog.py), not from the files in the image
+            - name: catalog_source
+              value: "db"
           envFrom:
             - secretRef:
                 name: config
