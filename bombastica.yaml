@@ -1,17 +1,4 @@
-# Bombastica — a second customer deployment of the Pizza Checker.
-#
-# Bombastica has no ordering system we read, so it runs its own stack: its own
-# MongoDB, S3 and ThingsBoard credentials, `biteberry_enabled=false`, and the
-# catalog imported into its own database (customers/bombastica in
-# Algovectra/pizza-backend). Staff pick the pizza on a station tablet
-# (https://bombastica.algovectra.com/stanice) and the branch camera photographs it.
-#
-# Credentials are not in git: the `config` Secret is assembled by External Secrets
-# from the OpenBao path `bombastica/config` (same key names the backend reads in its
-# other deployment: mongo_*, s3_*, jwt_secret, thingsboard_jwt_token,
-# flagsmith_environment_key, google_sign_in_*). Do NOT copy the `config` Secret from
-# the `default` namespace — that holds Vosime's database and storage credentials.
----
+
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -19,7 +6,6 @@ metadata:
   labels:
     app.kubernetes.io/part-of: bombastica
   annotations:
-    # the namespace has to exist before anything in it is applied on the first sync
     argocd.argoproj.io/sync-wave: "-2"
 ---
 apiVersion: external-secrets.io/v1
@@ -195,9 +181,6 @@ spec:
           image: algovectra/runpod-inference:admin-0.0.130
           imagePullPolicy: IfNotPresent
           env:
-            # the admin reads its backend at runtime; both names are set because the
-            # Vosime deployment uses VITE_BACKEND_URL while the backend README
-            # documents BACKEND_URL for a customer deployment
             - name: VITE_BACKEND_URL
               value: https://bombastica-api.algovectra.com/
             - name: BACKEND_URL
