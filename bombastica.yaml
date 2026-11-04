@@ -181,7 +181,7 @@ spec:
         - name: dockerhub
       containers:
         - name: bombastica-admin
-          image: algovectra/runpod-inference:admin-0.0.137
+          image: algovectra/runpod-inference:admin-0.0.138
           imagePullPolicy: IfNotPresent
           env:
             - name: VITE_BACKEND_URL
