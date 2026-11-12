@@ -190,6 +190,22 @@ spec:
         kubernetes.io/arch: amd64
       imagePullSecrets:
         - name: pcp-registry
+      initContainers:
+        - name: wait-for-postgres
+          image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -h pcp-db -U pcp -d pcp; do
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
       containers:
         - name: api
           image: ghcr.io/algovectra/pcp-api@sha256:e2be10f2ebac8821b34b177a64dec9bc94bfe8beccbe1d3ac543a0d7c03f45f3
