@@ -3,6 +3,8 @@ kind: ExternalSecret
 metadata:
   name: algovectra-web-contact
   namespace: default
+  annotations:
+    force-sync: "1794761072"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -55,10 +57,11 @@ spec:
           envFrom:
             - secretRef:
                 name: algovectra-web-contact
-                optional: true
           env:
             - name: CONTACT_MAIL_PROVIDER
               value: google-apps-script
+            - name: CONTACT_ABUSE_PROTECTION
+              value: verified-edge
             - name: CONTACT_PUBLIC_PROCESSING_APPROVED
               value: "true"
           readinessProbe:
