@@ -118,7 +118,6 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     konghq.com/https-redirect-status-code: "308"
-    konghq.com/methods: GET,HEAD,OPTIONS
     konghq.com/preserve-host: "true"
     konghq.com/protocols: https
     konghq.com/strip-path: "false"
