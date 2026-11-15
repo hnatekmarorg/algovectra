@@ -1,0 +1,164 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: algovectra-web-contact
+  namespace: default
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: local-algovectra
+    kind: ClusterSecretStore
+  target:
+    name: algovectra-web-contact
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: algovectra-web-contact
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: algovectra-web
+  namespace: default
+  annotations:
+    app.algovectra.com/source-revision: e4e28721a2a7038079e09e9e5b24d5227d0846cc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: algovectra-web
+  template:
+    metadata:
+      labels:
+        app: algovectra-web
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: dockerhub
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: docker.io/algovectra/runpod-inference@sha256:4c3cc0cccb243cc4b9c5b5951451d5c601a3e1a087dfa7bef53d79d88af1e685
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            - secretRef:
+                name: algovectra-web-contact
+                optional: true
+          env:
+            - name: CONTACT_MAIL_PROVIDER
+              value: google-apps-script
+            - name: CONTACT_PUBLIC_PROCESSING_APPROVED
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /robots.txt
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /robots.txt
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: algovectra-web
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: algovectra-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: algovectra-web-post-rate-limit
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: kong
+plugin: rate-limiting
+config:
+  limit_by: ip
+  minute: 12
+  policy: local
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: algovectra-web
+  namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    konghq.com/https-redirect-status-code: "308"
+    konghq.com/methods: GET,HEAD,OPTIONS
+    konghq.com/preserve-host: "true"
+    konghq.com/protocols: https
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - algovectra.com
+      secretName: algovectra-web-tls
+  rules:
+    - host: algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: algovectra-web
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: algovectra-web-post
+  namespace: default
+  annotations:
+    konghq.com/https-redirect-status-code: "308"
+    konghq.com/methods: POST
+    konghq.com/plugins: algovectra-web-post-rate-limit
+    konghq.com/preserve-host: "true"
+    konghq.com/protocols: https
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  rules:
+    - host: algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: algovectra-web
+                port:
+                  name: http
