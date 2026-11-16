@@ -1,0 +1,331 @@
+# PCP staging on the existing Algovectra Argo CD application.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pcp-staging
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+    argocd.argoproj.io/sync-options: Prune=confirm
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-database
+  namespace: pcp-staging
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-database
+    creationPolicy: Owner
+  data:
+    - secretKey: POSTGRES_PASSWORD
+      remoteRef:
+        key: pcp-staging/database
+        property: POSTGRES_PASSWORD
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-api
+  namespace: pcp-staging
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-api
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: pcp-staging/api
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-registry
+  namespace: pcp-staging
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-registry
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+  data:
+    - secretKey: .dockerconfigjson
+      remoteRef:
+        key: pcp-staging/registry
+        property: .dockerconfigjson
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pcp-tenant-repos
+  namespace: pcp-staging
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-db
+  namespace: pcp-staging
+spec:
+  clusterIP: None
+  selector:
+    app: pcp-db
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pcp-db
+  namespace: pcp-staging
+spec:
+  serviceName: pcp-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pcp-db
+  template:
+    metadata:
+      labels:
+        app: pcp-db
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: pcp
+            - name: POSTGRES_USER
+              value: pcp
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-database
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, pcp, -d, pcp]
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pcp-db
+  namespace: pcp-staging
+spec:
+  podSelector:
+    matchLabels:
+      app: pcp-db
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: pcp-api
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcp-api
+  namespace: pcp-staging
+  annotations:
+    pcp.algovectra.com/source-revision: d9765ee6a9c0cc3003aa0b19a696fece86cf17bf
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pcp-api
+  template:
+    metadata:
+      labels:
+        app: pcp-api
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      imagePullSecrets:
+        - name: pcp-registry
+      initContainers:
+        - name: wait-for-postgres
+          image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -h pcp-db -U pcp -d pcp; do
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+      containers:
+        - name: api
+          image: ghcr.io/algovectra/pcp-api@sha256:e2be10f2ebac8821b34b177a64dec9bc94bfe8beccbe1d3ac543a0d7c03f45f3
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: SEED_DEMOS
+              value: "1"
+            - name: PARTNER_SMTP_ENABLED
+              value: "0"
+            - name: CORS_ORIGINS
+              value: https://pcp-staging.algovectra.com
+            - name: WORKOS_REDIRECT_URI
+              value: https://pcp-staging.algovectra.com/auth/callback
+            - name: PUBLIC_CONFIGURATOR_URL
+              value: https://pcp-staging.algovectra.com
+            - name: TENANT_REPOS_DIR
+              value: /var/data/tenants
+            # Use a URL-safe password, such as randomly generated hex.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-database
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://pcp:$(POSTGRES_PASSWORD)@pcp-db:5432/pcp
+            - name: WORKOS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-api
+                  key: WORKOS_API_KEY
+            - name: WORKOS_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-api
+                  key: WORKOS_CLIENT_ID
+            - name: WORKOS_COOKIE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-api
+                  key: WORKOS_COOKIE_PASSWORD
+            - name: ADMIN_ALLOWLIST_EMAILS
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-api
+                  key: ADMIN_ALLOWLIST_EMAILS
+            - name: WORKOS_ISSUER
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-api
+                  key: WORKOS_ISSUER
+                  optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+          volumeMounts:
+            - name: tenant-repos
+              mountPath: /var/data/tenants
+      volumes:
+        - name: tenant-repos
+          persistentVolumeClaim:
+            claimName: pcp-tenant-repos
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-api
+  namespace: pcp-staging
+spec:
+  selector:
+    app: pcp-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pcp-api
+  namespace: pcp-staging
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts: [pcp-staging.algovectra.com]
+      secretName: pcp-staging-tls
+  rules:
+    - host: pcp-staging.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pcp-api
+                port:
+                  name: http
