@@ -1,0 +1,795 @@
+# Restore each database and file set before enabling its API Deployment.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pcp-draftigo-prod
+  annotations:
+    argocd.argoproj.io/sync-wave: '-2'
+    argocd.argoproj.io/sync-options: Prune=confirm
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-database
+  namespace: pcp-draftigo-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-database
+    creationPolicy: Owner
+  data:
+  - secretKey: POSTGRES_PASSWORD
+    remoteRef:
+      key: pcp-draftigo-prod/database
+      property: POSTGRES_PASSWORD
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-api
+  namespace: pcp-draftigo-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-api
+    creationPolicy: Owner
+  data:
+  - secretKey: WORKOS_API_KEY
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: WORKOS_API_KEY
+  - secretKey: WORKOS_CLIENT_ID
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: WORKOS_CLIENT_ID
+  - secretKey: WORKOS_COOKIE_PASSWORD
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: WORKOS_COOKIE_PASSWORD
+  - secretKey: WORKOS_ISSUER
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: WORKOS_ISSUER
+  - secretKey: ADMIN_ALLOWLIST_EMAILS
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: ADMIN_ALLOWLIST_EMAILS
+  - secretKey: CORS_ORIGINS
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: CORS_ORIGINS
+  - secretKey: WORKOS_AUTH_ORIGINS
+    remoteRef:
+      key: pcp-draftigo-prod/api
+      property: WORKOS_AUTH_ORIGINS
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-registry
+  namespace: pcp-draftigo-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-registry
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+  data:
+  - secretKey: .dockerconfigjson
+    remoteRef:
+      key: pcp-draftigo-prod/registry
+      property: .dockerconfigjson
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pcp-tenant-repos
+  namespace: pcp-draftigo-prod
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-db
+  namespace: pcp-draftigo-prod
+spec:
+  clusterIP: None
+  selector:
+    app: pcp-db
+  ports:
+  - name: postgres
+    port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pcp-db
+  namespace: pcp-draftigo-prod
+spec:
+  serviceName: pcp-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pcp-db
+  template:
+    metadata:
+      labels:
+        app: pcp-db
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: postgres
+        image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+        ports:
+        - name: postgres
+          containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: pcp
+        - name: POSTGRES_USER
+          value: pcp
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-database
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -h
+            - 127.0.0.1
+            - -U
+            - pcp
+            - -d
+            - pcp
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 20Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pcp-db
+  namespace: pcp-draftigo-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: pcp-db
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: pcp-api
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcp-api
+  namespace: pcp-draftigo-prod
+  annotations:
+    pcp.algovectra.com/source-revision: d9765ee6a9c0cc3003aa0b19a696fece86cf17bf
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pcp-api
+  template:
+    metadata:
+      labels:
+        app: pcp-api
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      imagePullSecrets:
+      - name: pcp-registry
+      initContainers:
+      - name: wait-for-postgres
+        image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+        command:
+        - sh
+        - -ec
+        - "until pg_isready -h pcp-db -U pcp -d pcp; do\n  sleep 2\ndone\n"
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            memory: 64Mi
+      containers:
+      - name: api
+        image: ghcr.io/algovectra/pcp-api@sha256:bec308e2ff9b8cb7e78b577d58350c597fe49cfbf51af06754fb324f4dd15a6c
+        ports:
+        - name: http
+          containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: '3000'
+        - name: SEED_DEMOS
+          value: '0'
+        - name: PCP_PASSIVE_RUNTIME
+          value: '1'
+        - name: PARTNER_SMTP_ENABLED
+          value: '0'
+        - name: WORKOS_REDIRECT_URI
+          value: https://api.draftigo.com/auth/callback
+        - name: PUBLIC_CONFIGURATOR_URL
+          value: https://app.draftigo.com
+        - name: TENANT_REPOS_DIR
+          value: /var/data/tenants
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-database
+              key: POSTGRES_PASSWORD
+        - name: DATABASE_URL
+          value: postgresql://pcp:$(POSTGRES_PASSWORD)@pcp-db:5432/pcp
+        - name: WORKOS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_API_KEY
+        - name: WORKOS_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_CLIENT_ID
+        - name: WORKOS_COOKIE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_COOKIE_PASSWORD
+        - name: WORKOS_ISSUER
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_ISSUER
+        - name: ADMIN_ALLOWLIST_EMAILS
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: ADMIN_ALLOWLIST_EMAILS
+        - name: CORS_ORIGINS
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: CORS_ORIGINS
+        - name: WORKOS_AUTH_ORIGINS
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_AUTH_ORIGINS
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 15
+        volumeMounts:
+        - name: tenant-repos
+          mountPath: /var/data/tenants
+      volumes:
+      - name: tenant-repos
+        persistentVolumeClaim:
+          claimName: pcp-tenant-repos
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-api
+  namespace: pcp-draftigo-prod
+spec:
+  selector:
+    app: pcp-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pcp-pooltechnika-prod
+  annotations:
+    argocd.argoproj.io/sync-wave: '-2'
+    argocd.argoproj.io/sync-options: Prune=confirm
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-database
+  namespace: pcp-pooltechnika-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-database
+    creationPolicy: Owner
+  data:
+  - secretKey: POSTGRES_PASSWORD
+    remoteRef:
+      key: pcp-pooltechnika-prod/database
+      property: POSTGRES_PASSWORD
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-api
+  namespace: pcp-pooltechnika-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-api
+    creationPolicy: Owner
+  data:
+  - secretKey: WORKOS_API_KEY
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: WORKOS_API_KEY
+  - secretKey: WORKOS_CLIENT_ID
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: WORKOS_CLIENT_ID
+  - secretKey: WORKOS_COOKIE_PASSWORD
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: WORKOS_COOKIE_PASSWORD
+  - secretKey: WORKOS_ISSUER
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: WORKOS_ISSUER
+  - secretKey: ADMIN_ALLOWLIST_EMAILS
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: ADMIN_ALLOWLIST_EMAILS
+  - secretKey: CORS_ORIGINS
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: CORS_ORIGINS
+  - secretKey: WORKOS_AUTH_ORIGINS
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: WORKOS_AUTH_ORIGINS
+  - secretKey: PARTNER_PAIRING_SECRET
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: PARTNER_PAIRING_SECRET
+  - secretKey: PARTNER_SMTP_FROM
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: PARTNER_SMTP_FROM
+  - secretKey: PARTNER_SMTP_HOST
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: PARTNER_SMTP_HOST
+  - secretKey: PARTNER_SMTP_PASSWORD
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: PARTNER_SMTP_PASSWORD
+  - secretKey: PARTNER_SMTP_PORT
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: PARTNER_SMTP_PORT
+  - secretKey: PARTNER_SMTP_USER
+    remoteRef:
+      key: pcp-pooltechnika-prod/api
+      property: PARTNER_SMTP_USER
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-registry
+  namespace: pcp-pooltechnika-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-registry
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+  data:
+  - secretKey: .dockerconfigjson
+    remoteRef:
+      key: pcp-pooltechnika-prod/registry
+      property: .dockerconfigjson
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pcp-tenant-repos
+  namespace: pcp-pooltechnika-prod
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-db
+  namespace: pcp-pooltechnika-prod
+spec:
+  clusterIP: None
+  selector:
+    app: pcp-db
+  ports:
+  - name: postgres
+    port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pcp-db
+  namespace: pcp-pooltechnika-prod
+spec:
+  serviceName: pcp-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pcp-db
+  template:
+    metadata:
+      labels:
+        app: pcp-db
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: postgres
+        image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+        ports:
+        - name: postgres
+          containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: pcp
+        - name: POSTGRES_USER
+          value: pcp
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-database
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -h
+            - 127.0.0.1
+            - -U
+            - pcp
+            - -d
+            - pcp
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 20Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pcp-db
+  namespace: pcp-pooltechnika-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: pcp-db
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: pcp-api
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcp-api
+  namespace: pcp-pooltechnika-prod
+  annotations:
+    pcp.algovectra.com/source-revision: d9765ee6a9c0cc3003aa0b19a696fece86cf17bf
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pcp-api
+  template:
+    metadata:
+      labels:
+        app: pcp-api
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      imagePullSecrets:
+      - name: pcp-registry
+      initContainers:
+      - name: wait-for-postgres
+        image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+        command:
+        - sh
+        - -ec
+        - "until pg_isready -h pcp-db -U pcp -d pcp; do\n  sleep 2\ndone\n"
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            memory: 64Mi
+      containers:
+      - name: api
+        image: ghcr.io/algovectra/pcp-api@sha256:bec308e2ff9b8cb7e78b577d58350c597fe49cfbf51af06754fb324f4dd15a6c
+        ports:
+        - name: http
+          containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: '3000'
+        - name: SEED_DEMOS
+          value: '0'
+        - name: PCP_PASSIVE_RUNTIME
+          value: '1'
+        - name: PARTNER_SMTP_ENABLED
+          value: '0'
+        - name: WORKOS_REDIRECT_URI
+          value: https://pcp.algovectra.com/api/auth/callback
+        - name: PUBLIC_CONFIGURATOR_URL
+          value: https://pcp.algovectra.com
+        - name: TENANT_REPOS_DIR
+          value: /var/data/tenants
+        - name: PARTNER_PUBLIC_STORE_ONBOARDING
+          value: '1'
+        - name: PARTNER_ALPHA_ARTIFACT_DIR
+          value: /var/pcp/partner-alpha
+        - name: PCP_SITE_ASSET_DIR
+          value: /var/pcp/site-assets
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-database
+              key: POSTGRES_PASSWORD
+        - name: DATABASE_URL
+          value: postgresql://pcp:$(POSTGRES_PASSWORD)@pcp-db:5432/pcp
+        - name: WORKOS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_API_KEY
+        - name: WORKOS_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_CLIENT_ID
+        - name: WORKOS_COOKIE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_COOKIE_PASSWORD
+        - name: WORKOS_ISSUER
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_ISSUER
+        - name: ADMIN_ALLOWLIST_EMAILS
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: ADMIN_ALLOWLIST_EMAILS
+        - name: CORS_ORIGINS
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: CORS_ORIGINS
+        - name: WORKOS_AUTH_ORIGINS
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: WORKOS_AUTH_ORIGINS
+        - name: PARTNER_PAIRING_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: PARTNER_PAIRING_SECRET
+        - name: PARTNER_SMTP_FROM
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: PARTNER_SMTP_FROM
+        - name: PARTNER_SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: PARTNER_SMTP_HOST
+        - name: PARTNER_SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: PARTNER_SMTP_PASSWORD
+        - name: PARTNER_SMTP_PORT
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: PARTNER_SMTP_PORT
+        - name: PARTNER_SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: pcp-api
+              key: PARTNER_SMTP_USER
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 15
+        volumeMounts:
+        - name: tenant-repos
+          mountPath: /var/data/tenants
+        - name: partner-alpha
+          mountPath: /var/pcp/partner-alpha
+          readOnly: true
+        - name: site-assets
+          mountPath: /var/pcp/site-assets
+          readOnly: true
+      volumes:
+      - name: tenant-repos
+        persistentVolumeClaim:
+          claimName: pcp-tenant-repos
+      - name: partner-alpha
+        persistentVolumeClaim:
+          claimName: partner-alpha
+      - name: site-assets
+        persistentVolumeClaim:
+          claimName: site-assets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-api
+  namespace: pcp-pooltechnika-prod
+spec:
+  selector:
+    app: pcp-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: partner-alpha
+  namespace: pcp-pooltechnika-prod
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: site-assets
+  namespace: pcp-pooltechnika-prod
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 4Gi
