@@ -114,7 +114,7 @@ spec:
   ingressClassName: kong
   tls:
     - hosts: [pcp.algovectra.com]
-      secretName: pcp-web-tls-bootstrap
+      secretName: pcp-web-tls-managed
   rules:
     - host: pcp.algovectra.com
       http:
