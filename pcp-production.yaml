@@ -628,7 +628,7 @@ spec:
         - name: PCP_PASSIVE_RUNTIME
           value: '1'
         - name: PARTNER_SMTP_ENABLED
-          value: '0'
+          value: '1'
         - name: WORKOS_REDIRECT_URI
           value: https://pcp.algovectra.com/api/auth/callback
         - name: PUBLIC_CONFIGURATOR_URL
