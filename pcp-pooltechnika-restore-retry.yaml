@@ -1,0 +1,131 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pcp-restore-07deef14-retry1
+  namespace: pcp-pooltechnika-prod
+spec:
+  activeDeadlineSeconds: 900
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: pcp-restore
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: download
+        image: ghcr.io/oras-project/oras@sha256:98cb05d48988f3fe4b8a8eedb324a9f7644d4be88470769eeaeab433b12e37dd
+        args:
+        - pull
+        - --registry-config
+        - /registry/.dockerconfigjson
+        - --output
+        - /bundle
+        - ghcr.io/algovectra/pcp-api@sha256:641b16fcb23c0748a4cfc01ee39e0ec84664a298644328c9cd3a263d2f79d01e
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+        volumeMounts:
+        - name: registry
+          mountPath: /registry
+          readOnly: true
+        - name: bundle
+          mountPath: /bundle
+      - name: decrypt
+        image: docker.io/library/node@sha256:12f54cafa58d0e96554ae05871e29663ff7241836377dc9a7916449b8adb062c
+        command:
+        - node
+        - /restore/decrypt.mjs
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: PCP_RESTORE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pcp-restore-key
+              key: key
+        - name: PCP_RESTORE_SHA256
+          valueFrom:
+            secretKeyRef:
+              name: pcp-restore-key
+              key: sha256
+        resources:
+          requests:
+            cpu: 50m
+            memory: 512Mi
+          limits:
+            memory: 1Gi
+        volumeMounts:
+        - name: scripts
+          mountPath: /restore
+          readOnly: true
+        - name: bundle
+          mountPath: /bundle
+      containers:
+      - name: restore
+        image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+        command:
+        - /bin/sh
+        - /restore/restore.sh
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: PGHOST
+          value: pcp-db
+        - name: PGUSER
+          value: pcp
+        - name: PGDATABASE
+          value: pcp
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pcp-database
+              key: POSTGRES_PASSWORD
+        resources:
+          requests:
+            cpu: 100m
+            memory: 96Mi
+          limits:
+            memory: 512Mi
+        volumeMounts:
+        - name: scripts
+          mountPath: /restore
+          readOnly: true
+        - name: bundle
+          mountPath: /bundle
+        - name: site-assets
+          mountPath: /site-assets
+      volumes:
+      - name: registry
+        secret:
+          secretName: pcp-registry
+      - name: scripts
+        configMap:
+          name: pcp-restore-scripts
+      - name: bundle
+        emptyDir:
+          sizeLimit: 2Gi
+      - name: site-assets
+        persistentVolumeClaim:
+          claimName: site-assets
