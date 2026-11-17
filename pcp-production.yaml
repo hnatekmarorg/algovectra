@@ -581,7 +581,7 @@ metadata:
   name: pcp-api
   namespace: pcp-pooltechnika-prod
   annotations:
-    pcp.algovectra.com/source-revision: d9765ee6a9c0cc3003aa0b19a696fece86cf17bf
+    pcp.algovectra.com/source-revision: aff846395b4df1f1353be5d9437238912116bb6f
 spec:
   replicas: 1
   strategy:
@@ -614,7 +614,7 @@ spec:
             memory: 64Mi
       containers:
       - name: api
-        image: ghcr.io/algovectra/pcp-api@sha256:bec308e2ff9b8cb7e78b577d58350c597fe49cfbf51af06754fb324f4dd15a6c
+        image: ghcr.io/algovectra/pcp-api@sha256:021314b6353c5e86f785e26694b933038041a0ddea649987c254dab4b7ceb058
         ports:
         - name: http
           containerPort: 3000
@@ -704,10 +704,9 @@ spec:
               name: pcp-api
               key: PARTNER_SMTP_PASSWORD
         - name: PARTNER_SMTP_PORT
-          valueFrom:
-            secretKeyRef:
-              name: pcp-api
-              key: PARTNER_SMTP_PORT
+          value: '587'
+        - name: PARTNER_SMTP_STARTTLS
+          value: '1'
         - name: PARTNER_SMTP_USER
           valueFrom:
             secretKeyRef:

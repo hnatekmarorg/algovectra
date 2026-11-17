@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pcp-cutover-verify-20261117
+  namespace: pcp-pooltechnika-prod
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: verify
+          image: docker.io/library/node@sha256:12f54cafa58d0e96554ae05871e29663ff7241836377dc9a7916449b8adb062c
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import assert from 'node:assert/strict';
+              import {setTimeout as wait} from 'node:timers/promises';
+              const get = path => fetch('http://pcp-api' + path, {redirect:'manual',signal:AbortSignal.timeout(3000)});
+              const expected = 'aff846395b4df1f1353be5d9437238912116bb6f';
+              let ready = false;
+              for (let i = 0; i < 40; i++) {
+                try {
+                  const response = await get('/ready');
+                  await response.body?.cancel();
+                  if (response.ok) {
+                    const version = await get('/version');
+                    if (version.ok && (await version.json()).gitSha === expected) {
+                      ready = true;
+                      break;
+                    }
+                  }
+                } catch {}
+                await wait(5000);
+              }
+              assert(ready,'Pooltechnika did not become ready');
+              const response = await get('/version');
+              assert.equal(response.status,200);
+              const {gitSha,buildTime,node} = await response.json();
+              assert.equal(gitSha,expected);
+              for (const [path,status] of [['/health',200],['/public/pooltechnika/configurator',401],['/site-assets/studios/assets/alpine-exterior-v2-D0pZWFAN.webp',401]]) {
+                const response = await get(path);
+                await response.body?.cancel();
+                assert.equal(response.status,status,path);
+              }
+              const returnTo = encodeURIComponent('https://pcp.algovectra.com/pooltechnika');
+              const login = await get('/auth/login?returnTo=' + returnTo);
+              await login.body?.cancel();
+              assert.equal(login.status,302);
+              const auth = new URL(login.headers.get('location'));
+              assert.equal(auth.origin,'https://api.workos.com');
+              assert.equal(auth.searchParams.get('redirect_uri'),'https://pcp.algovectra.com/api/auth/callback');
+              console.log([gitSha,buildTime,node,'Ready, existing WorkOS callback and both anonymous gates verified'].join(' '));
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
