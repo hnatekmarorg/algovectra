@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pcp-private-verify-20261117
+  namespace: pcp-pooltechnika-prod
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: verify
+          image: docker.io/library/node@sha256:12f54cafa58d0e96554ae05871e29663ff7241836377dc9a7916449b8adb062c
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import assert from 'node:assert/strict';
+              import {setTimeout as wait} from 'node:timers/promises';
+              const get = path => fetch('http://pcp-api' + path, {redirect:'manual',signal:AbortSignal.timeout(3000)});
+              let ready = false;
+              for (let i = 0; i < 40; i++) {
+                try {
+                  const response = await get('/ready');
+                  await response.body?.cancel();
+                  if (response.ok) { ready = true; break; }
+                } catch {}
+                await wait(5000);
+              }
+              assert(ready,'Pooltechnika did not become ready');
+              const response = await get('/version');
+              assert.equal(response.status,200);
+              const {gitSha,buildTime,node} = await response.json();
+              assert.equal(gitSha,'d9765ee6a9c0cc3003aa0b19a696fece86cf17bf');
+              for (const [path,status] of [['/health',200],['/public/pooltechnika/configurator',401],['/site-assets/studios/assets/alpine-exterior-v2-D0pZWFAN.webp',401]]) {
+                const response = await get(path);
+                await response.body?.cancel();
+                assert.equal(response.status,status,path);
+              }
+              console.log(JSON.stringify({ready:true,gitSha,buildTime,node,catalogueAnonymous:401,assetsAnonymous:401}));
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
