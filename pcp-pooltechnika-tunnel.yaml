@@ -1,0 +1,121 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-tunnel
+  namespace: pcp-pooltechnika-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: local-algovectra
+    kind: ClusterSecretStore
+  target:
+    name: pcp-tunnel
+    creationPolicy: Owner
+  data:
+    - secretKey: config.yml
+      remoteRef:
+        key: pcp-pooltechnika-prod/tunnel
+        property: config.yml
+    - secretKey: tunnel.json
+      remoteRef:
+        key: pcp-pooltechnika-prod/tunnel
+        property: tunnel.json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcp-tunnel
+  namespace: pcp-pooltechnika-prod
+spec:
+  replicas: 0
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: pcp-tunnel}
+  template:
+    metadata:
+      labels: {app: pcp-tunnel}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: cloudflared
+          image: docker.io/cloudflare/cloudflared@sha256:59bab8d3aceec09bf6bdb07d6beca0225ca5cd7ab79436a87ea97978fe1dc4f9
+          args: [tunnel, --config, /etc/cloudflared/config.yml, run]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /ready, port: 2000}
+            periodSeconds: 3
+            timeoutSeconds: 2
+          resources:
+            requests: {cpu: 50m, memory: 48Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/cloudflared, readOnly: true}
+      volumes:
+        - name: config
+          secret: {secretName: pcp-tunnel}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pcp-tunnel-validate-20261117
+  namespace: pcp-pooltechnika-prod
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: ingress
+          image: docker.io/cloudflare/cloudflared@sha256:59bab8d3aceec09bf6bdb07d6beca0225ca5cd7ab79436a87ea97978fe1dc4f9
+          args: [tunnel, --config, /etc/cloudflared/config.yml, ingress, validate]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 30m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/cloudflared, readOnly: true}
+      containers:
+        - name: egress
+          image: docker.io/library/node@sha256:12f54cafa58d0e96554ae05871e29663ff7241836377dc9a7916449b8adb062c
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { connect } from 'node:net';
+              const probe = host => new Promise((resolve, reject) => {
+                const socket = connect({host, port:7844});
+                socket.setTimeout(5000, () => socket.destroy(new Error('Tunnel edge connection timed out')));
+                socket.once('error', reject);
+                socket.once('connect', () => { socket.destroy(); resolve(); });
+              });
+              await Promise.all(['region1.v2.argotunnel.com','region2.v2.argotunnel.com'].map(probe));
+              const api = await fetch('http://pcp-api/ready', {signal:AbortSignal.timeout(5000)});
+              if (!api.ok) throw new Error('Target API is not ready');
+              console.log('Tunnel ingress validated, both Cloudflare TCP edge regions reachable, and private API ready');
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 30m, memory: 32Mi}
+            limits: {memory: 128Mi}
+      volumes:
+        - name: config
+          secret: {secretName: pcp-tunnel}
