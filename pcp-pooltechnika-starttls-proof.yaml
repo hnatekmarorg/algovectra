@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pcp-smtp-starttls-20261117
+  namespace: pcp-pooltechnika-prod
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 60
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: pcp-registry
+      containers:
+        - name: verify
+          image: ghcr.io/algovectra/pcp-api@sha256:bec308e2ff9b8cb7e78b577d58350c597fe49cfbf51af06754fb324f4dd15a6c
+          workingDir: /app/services/api
+          command:
+            - node
+            - -e
+            - |
+              const mail = require('nodemailer');
+              const env = process.env;
+              const transport = mail.createTransport({
+                host:env.PARTNER_SMTP_HOST,port:587,secure:false,requireTLS:true,
+                auth:{user:env.PARTNER_SMTP_USER,pass:env.PARTNER_SMTP_PASSWORD},
+                connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,
+              });
+              transport.verify().then(() => {
+                console.log('Pooltechnika SMTP verified over certificate-checked STARTTLS on port 587, no email sent');
+              }).catch(error => {
+                console.error('SMTP STARTTLS verification failed',error.code,error.command,error.responseCode);
+                process.exitCode = 1;
+              }).finally(() => transport.close());
+          env:
+            - name: PARTNER_SMTP_HOST
+              valueFrom:
+                secretKeyRef: {name: pcp-api, key: PARTNER_SMTP_HOST}
+            - name: PARTNER_SMTP_USER
+              valueFrom:
+                secretKeyRef: {name: pcp-api, key: PARTNER_SMTP_USER}
+            - name: PARTNER_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: pcp-api, key: PARTNER_SMTP_PASSWORD}
+          resources:
+            requests: {cpu: 30m, memory: 64Mi}
+            limits: {memory: 256Mi}
