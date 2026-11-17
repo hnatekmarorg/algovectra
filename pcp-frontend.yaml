@@ -1,0 +1,127 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-web-tls-bootstrap
+  namespace: pcp-pooltechnika-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: local-algovectra
+    kind: ClusterSecretStore
+  target:
+    name: pcp-web-tls-bootstrap
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/tls
+      data:
+        tls.crt: '{{ .certificate }}'
+        tls.key: '{{ .privateKey }}'
+  data:
+    - secretKey: certificate
+      remoteRef:
+        key: pcp-pooltechnika-prod/frontend-tls-bootstrap
+        property: tls.crt
+    - secretKey: privateKey
+      remoteRef:
+        key: pcp-pooltechnika-prod/frontend-tls-bootstrap
+        property: tls.key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcp-web
+  namespace: pcp-pooltechnika-prod
+  annotations:
+    pcp.algovectra.com/site-source: 969cbd73f5037155cd4adb483476e70798e85988
+    pcp.algovectra.com/site-version: "76"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: pcp-web}
+  template:
+    metadata:
+      labels: {app: pcp-web}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/arch: amd64}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      imagePullSecrets:
+        - name: pcp-registry
+      containers:
+        - name: frontend
+          image: ghcr.io/algovectra/pcp-web@sha256:949df24cc83c3fe160c5eb2aacaf2f3765da67e5b474c5864f030a851f461081
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: APP_ORIGIN, value: https://pcp.algovectra.com}
+            - name: WORKOS_API_KEY
+              valueFrom:
+                secretKeyRef: {name: pcp-api, key: WORKOS_API_KEY}
+            - name: WORKOS_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: pcp-api, key: WORKOS_CLIENT_ID}
+            - name: WORKOS_COOKIE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: pcp-api, key: WORKOS_COOKIE_PASSWORD}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /_pcp_frontend_health, port: http}
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet: {path: /_pcp_frontend_health, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /_pcp_frontend_health, port: http}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: runtime-tmp, mountPath: /tmp}
+      volumes:
+        - name: runtime-tmp
+          emptyDir: {sizeLimit: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-web
+  namespace: pcp-pooltechnika-prod
+spec:
+  selector: {app: pcp-web}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pcp-web
+  namespace: pcp-pooltechnika-prod
+  annotations:
+    konghq.com/https-redirect-status-code: "308"
+    konghq.com/preserve-host: "true"
+    konghq.com/protocols: https
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts: [pcp.algovectra.com]
+      secretName: pcp-web-tls-bootstrap
+  rules:
+    - host: pcp.algovectra.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pcp-web
+                port: {name: http}
