@@ -27,7 +27,7 @@ metadata:
   name: pcp-tunnel
   namespace: pcp-pooltechnika-prod
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: Recreate}
   selector:
     matchLabels: {app: pcp-tunnel}
