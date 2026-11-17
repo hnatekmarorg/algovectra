@@ -583,7 +583,7 @@ metadata:
   annotations:
     pcp.algovectra.com/source-revision: d9765ee6a9c0cc3003aa0b19a696fece86cf17bf
 spec:
-  replicas: 0
+  replicas: 1
   strategy:
     type: Recreate
   selector:
