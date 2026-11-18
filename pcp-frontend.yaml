@@ -32,6 +32,7 @@ metadata:
   name: pcp-web
   namespace: pcp-pooltechnika-prod
   annotations:
+    argocd.argoproj.io/sync-options: Prune=false
     pcp.algovectra.com/site-source: 969cbd73f5037155cd4adb483476e70798e85988
     pcp.algovectra.com/site-version: "76"
 spec:
