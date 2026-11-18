@@ -1,7 +1,7 @@
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: pcp-license-recovery-20261118
+  name: pcp-license-recovery-20261118-v2
   namespace: pcp-pooltechnika-prod
 spec:
   refreshPolicy: CreatedOnce
@@ -9,7 +9,7 @@ spec:
     kind: ClusterSecretStore
     name: local-algovectra
   target:
-    name: pcp-license-recovery-20261118
+    name: pcp-license-recovery-20261118-v2
     creationPolicy: Owner
   data:
     - secretKey: payload
@@ -20,7 +20,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: pcp-license-recovery-20261118
+  name: pcp-license-recovery-20261118-v2
   namespace: pcp-pooltechnika-prod
 data:
   merge.sql: |
@@ -109,7 +109,8 @@ data:
         ) THEN
           RAISE EXCEPTION 'Unsafe tenant scope for %', relation;
         END IF;
-        EXECUTE format('INSERT INTO public.%1$I SELECT * FROM jsonb_populate_recordset(NULL::public.%1$I, $1)
+        EXECUTE format('INSERT INTO public.%1$I OVERRIDING SYSTEM VALUE
+                       SELECT * FROM jsonb_populate_recordset(NULL::public.%1$I, $1)
                        ON CONFLICT DO NOTHING',relation) USING entries;
         GET DIAGNOSTICS added = ROW_COUNT;
         EXECUTE format('SELECT count(*) FROM (
@@ -139,7 +140,7 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pcp-license-recovery-20261118
+  name: pcp-license-recovery-20261118-v2
   namespace: pcp-pooltechnika-prod
 spec:
   backoffLimit: 0
@@ -197,10 +198,10 @@ spec:
       volumes:
         - name: export
           secret:
-            secretName: pcp-license-recovery-20261118
+            secretName: pcp-license-recovery-20261118-v2
             defaultMode: 0440
         - name: sql
           configMap:
-            name: pcp-license-recovery-20261118
+            name: pcp-license-recovery-20261118-v2
         - name: scratch
           emptyDir: {medium: Memory, sizeLimit: 8Mi}
