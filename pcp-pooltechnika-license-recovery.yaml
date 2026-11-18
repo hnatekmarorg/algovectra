@@ -1,0 +1,206 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-license-recovery-20261118
+  namespace: pcp-pooltechnika-prod
+spec:
+  refreshPolicy: CreatedOnce
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-license-recovery-20261118
+    creationPolicy: Owner
+  data:
+    - secretKey: payload
+      remoteRef:
+        key: pcp-pooltechnika-prod/license-recovery-20261118
+        property: payload
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pcp-license-recovery-20261118
+  namespace: pcp-pooltechnika-prod
+data:
+  merge.sql: |
+    \set ON_ERROR_STOP on
+    \set VERBOSITY terse
+    BEGIN;
+    SET LOCAL lock_timeout = '4s';
+    SET LOCAL statement_timeout = '25s';
+    SET LOCAL search_path = pg_temp, public;
+
+    CREATE TEMP TABLE encoded_snapshot (payload text) ON COMMIT DROP;
+    \copy encoded_snapshot FROM '/tmp/pcp-license-export.b64'
+    CREATE TEMP TABLE recovery_snapshot ON COMMIT DROP AS
+    SELECT convert_from(decode(payload, 'base64'), 'UTF8')::jsonb AS document FROM encoded_snapshot;
+    CREATE TEMP TABLE recovery_users ON COMMIT DROP AS
+    SELECT u.* FROM recovery_snapshot s,
+    LATERAL jsonb_populate_recordset(NULL::public.users,s.document->'rows'->'users') u;
+
+    LOCK TABLE public.tenants, public.users, public.user_roles, public.user_access_events,
+      public.partner_companies, public.partner_seats, public.partner_license_events,
+      public.partner_license_removals, public.partner_company_pairing_blocks,
+      public.partner_registered_devices, public.partner_pairing_invitations,
+      public.partner_device_challenges, public.partner_tokens
+      IN SHARE ROW EXCLUSIVE MODE;
+
+    DO $recovery$
+    DECLARE
+      source jsonb;
+      tenant uuid := 'b06e4929-7ad3-418e-9c3a-3b1f70f165b9';
+      relation text;
+      entries jsonb;
+      added integer;
+      missing integer;
+      next_event_id bigint;
+    BEGIN
+      SELECT document INTO STRICT source FROM recovery_snapshot;
+      IF current_database() <> 'pcp'
+        OR (SELECT id FROM public.tenants WHERE slug = 'pooltechnika') IS DISTINCT FROM tenant
+        OR source->>'database' IS DISTINCT FROM 'pcp_alpha_20261102'
+        OR source->>'tenant' IS DISTINCT FROM tenant::text
+        OR jsonb_array_length(source->'rows'->'partner_companies') IS DISTINCT FROM 3
+        OR jsonb_array_length(source->'rows'->'partner_seats') IS DISTINCT FROM 2
+        OR jsonb_array_length(source->'rows'->'user_roles') IS DISTINCT FROM 4 THEN
+        RAISE EXCEPTION 'Pooltechnika source or destination identity differs';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM public.user_access_events
+        WHERE details->>'tenantSlug' = 'pooltechnika'
+          AND created_at >= '2026-11-17 21:42:45+00'::timestamptz)
+        OR EXISTS (SELECT 1 FROM public.partner_license_removals
+          WHERE tenant_id=tenant AND created_at >= '2026-11-17 21:42:45+00'::timestamptz) THEN
+        RAISE EXCEPTION 'A post-cutover access or removal event requires reconciliation';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM recovery_users s JOIN public.users t USING (id)
+          WHERE lower(s.email) IS DISTINCT FROM lower(t.email)
+             OR (s.workos_user_id IS NOT NULL AND t.workos_user_id IS NOT NULL
+                 AND s.workos_user_id <> t.workos_user_id)
+             OR (s.access_blocked AND NOT t.access_blocked))
+        OR EXISTS (SELECT 1 FROM recovery_users s JOIN public.users t
+             ON lower(s.email)=lower(t.email)
+             OR s.workos_user_id=t.workos_user_id OR s.firebase_uid=t.firebase_uid
+          WHERE s.id <> t.id) THEN
+        RAISE EXCEPTION 'Source and target account identity conflict';
+      END IF;
+
+      INSERT INTO public.users SELECT * FROM recovery_users ON CONFLICT DO NOTHING;
+      GET DIAGNOSTICS added = ROW_COUNT;
+      IF EXISTS (SELECT 1 FROM recovery_users s WHERE NOT EXISTS (SELECT 1 FROM public.users t WHERE t.id=s.id)) THEN
+        RAISE EXCEPTION 'A linked account could not be reconciled';
+      END IF;
+      RAISE NOTICE 'recovery users added=%', added;
+
+      FOREACH relation IN ARRAY ARRAY[
+        'user_roles','user_access_events','partner_companies','partner_seats',
+        'partner_license_events','partner_license_removals','partner_company_pairing_blocks',
+        'partner_registered_devices','partner_pairing_invitations','partner_device_challenges','partner_tokens'
+      ] LOOP
+        entries := source->'rows'->relation;
+        IF jsonb_typeof(entries) IS DISTINCT FROM 'array' OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(entries) AS item
+          WHERE CASE WHEN relation='user_access_events'
+              THEN item->'details'->>'tenantSlug' IS DISTINCT FROM 'pooltechnika'
+              ELSE item->>'tenant_id' IS DISTINCT FROM tenant::text END
+            OR (relation='user_roles' AND item->>'role' IS DISTINCT FROM 'pooltechnika-access-manager')
+        ) THEN
+          RAISE EXCEPTION 'Unsafe tenant scope for %', relation;
+        END IF;
+        EXECUTE format('INSERT INTO public.%1$I SELECT * FROM jsonb_populate_recordset(NULL::public.%1$I, $1)
+                       ON CONFLICT DO NOTHING',relation) USING entries;
+        GET DIAGNOSTICS added = ROW_COUNT;
+        EXECUTE format('SELECT count(*) FROM (
+          SELECT to_jsonb(s) FROM jsonb_populate_recordset(NULL::public.%1$I,$1) s
+          EXCEPT ALL SELECT to_jsonb(t) FROM public.%1$I t) missing', relation)
+          INTO missing USING entries;
+        IF missing <> 0 THEN
+          RAISE EXCEPTION 'A conflicting row was preserved in %', relation;
+        END IF;
+        RAISE NOTICE 'recovery % added=% matched=%', relation, added, jsonb_array_length(entries);
+      END LOOP;
+
+      SELECT greatest((SELECT last_value FROM public.partner_license_events_id_seq),
+        coalesce((SELECT max(id) FROM public.partner_license_events),0)) + 1 INTO next_event_id;
+      EXECUTE format('ALTER SEQUENCE public.partner_license_events_id_seq RESTART WITH %s',next_event_id);
+    END
+    $recovery$;
+
+    \if :apply
+    COMMIT;
+    \echo POOLTECHNIKA_RECOVERY_COMMITTED
+    \else
+    ROLLBACK;
+    \echo POOLTECHNIKA_RECOVERY_REHEARSED
+    \endif
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pcp-license-recovery-20261118
+  namespace: pcp-pooltechnika-prod
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: recover
+          image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              base64 -d /input/payload > /tmp/verified.json
+              printf '%s  %s\n' '5c384f0ff9fa0b6adb953f5c1b082414632137b5acab83690c1a8e5ec1982ad7' /tmp/verified.json | sha256sum -c -
+              cat /input/payload > /tmp/pcp-license-export.b64
+              printf '\n' >> /tmp/pcp-license-export.b64
+              rm /tmp/verified.json
+              psql -XqAt -v apply=false -f /script/merge.sql
+              psql -XqAt -v apply=true -f /script/merge.sql
+              rm /tmp/pcp-license-export.b64
+              psql -XqAt -v ON_ERROR_STOP=1 -c "SELECT 'LIVE_COUNTS companies=' || (SELECT count(*) FROM partner_companies WHERE tenant_id=(SELECT id FROM tenants WHERE slug='pooltechnika')) || ' seats=' || (SELECT count(*) FROM partner_seats WHERE tenant_id=(SELECT id FROM tenants WHERE slug='pooltechnika')) || ' administrator_grants=' || (SELECT count(*) FROM user_roles WHERE tenant_id=(SELECT id FROM tenants WHERE slug='pooltechnika') AND role='pooltechnika-access-manager')"
+          env:
+            - {name: PGHOST, value: pcp-db}
+            - {name: PGUSER, value: pcp}
+            - {name: PGDATABASE, value: pcp}
+            - {name: PGCONNECT_TIMEOUT, value: "5"}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pcp-database
+                  key: POSTGRES_PASSWORD
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 50m, memory: 40Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: export, mountPath: /input, readOnly: true}
+            - {name: sql, mountPath: /script, readOnly: true}
+            - {name: scratch, mountPath: /tmp}
+      volumes:
+        - name: export
+          secret:
+            secretName: pcp-license-recovery-20261118
+            defaultMode: 0440
+        - name: sql
+          configMap:
+            name: pcp-license-recovery-20261118
+        - name: scratch
+          emptyDir: {medium: Memory, sizeLimit: 8Mi}
