@@ -1,7 +1,7 @@
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: pcp-license-recovery-20261118-v2
+  name: pcp-license-recovery-20261118-v3
   namespace: pcp-pooltechnika-prod
 spec:
   refreshPolicy: CreatedOnce
@@ -9,7 +9,7 @@ spec:
     kind: ClusterSecretStore
     name: local-algovectra
   target:
-    name: pcp-license-recovery-20261118-v2
+    name: pcp-license-recovery-20261118-v3
     creationPolicy: Owner
   data:
     - secretKey: payload
@@ -20,7 +20,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: pcp-license-recovery-20261118-v2
+  name: pcp-license-recovery-20261118-v3
   namespace: pcp-pooltechnika-prod
 data:
   merge.sql: |
@@ -137,15 +137,36 @@ data:
     \echo POOLTECHNIKA_RECOVERY_REHEARSED
     \endif
 ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pcp-license-recovery-20261118-v3
+  namespace: pcp-pooltechnika-prod
+spec:
+  podSelector:
+    matchLabels: {app: pcp-db, statefulset.kubernetes.io/pod-name: pcp-db-0}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              pcp.algovectra.com/maintenance: pcp-license-recovery-20261118-v3
+              batch.kubernetes.io/job-name: pcp-license-recovery-20261118-v3
+      ports:
+        - {protocol: TCP, port: 5432}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pcp-license-recovery-20261118-v2
+  name: pcp-license-recovery-20261118-v3
   namespace: pcp-pooltechnika-prod
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 300
   template:
+    metadata:
+      labels:
+        pcp.algovectra.com/maintenance: pcp-license-recovery-20261118-v3
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -169,6 +190,11 @@ spec:
               cat /input/payload > /tmp/pcp-license-export.b64
               printf '\n' >> /tmp/pcp-license-export.b64
               rm /tmp/verified.json
+              for attempt in $(seq 1 30); do
+                if pg_isready -q -t 2; then break; fi
+                if [ "$attempt" = 30 ]; then echo 'Scoped database connection did not become ready'; exit 2; fi
+                sleep 2
+              done
               psql -XqAt -v apply=false -f /script/merge.sql
               psql -XqAt -v apply=true -f /script/merge.sql
               rm /tmp/pcp-license-export.b64
@@ -198,10 +224,10 @@ spec:
       volumes:
         - name: export
           secret:
-            secretName: pcp-license-recovery-20261118-v2
+            secretName: pcp-license-recovery-20261118-v3
             defaultMode: 0440
         - name: sql
           configMap:
-            name: pcp-license-recovery-20261118-v2
+            name: pcp-license-recovery-20261118-v3
         - name: scratch
           emptyDir: {medium: Memory, sizeLimit: 8Mi}
