@@ -1,0 +1,45 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-production-release-registry
+  namespace: argocd
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-production-release-registry
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      metadata:
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      data:
+        type: oci
+        project: pcp-production-release
+        url: oci://ghcr.io/algovectra/pcp-api
+        username: '{{ $entry := index ((fromJson .config).auths) "ghcr.io" }}{{ index (splitList ":" ($entry.auth | b64dec)) 0 }}'
+        password: '{{ $entry := index ((fromJson .config).auths) "ghcr.io" }}{{ index (splitList ":" ($entry.auth | b64dec)) 1 }}'
+  data:
+    - secretKey: config
+      remoteRef:
+        key: pcp-pooltechnika-prod/registry
+        property: .dockerconfigjson
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: pcp-production-release
+  namespace: argocd
+spec:
+  sourceRepos:
+    - oci://ghcr.io/algovectra/pcp-api
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: pcp-pooltechnika-prod
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
