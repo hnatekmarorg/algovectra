@@ -43,3 +43,23 @@ spec:
   namespaceResourceWhitelist:
     - group: apps
       kind: Deployment
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pcp-production-release
+  namespace: argocd
+spec:
+  project: pcp-production-release
+  source:
+    repoURL: oci://ghcr.io/algovectra/pcp-api
+    targetRevision: "sha256:901ffef2cb5a48d46159d4835e354428d44863be9652747494b9494eebc03812"
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pcp-pooltechnika-prod
+  syncPolicy:
+    automated:
+      enabled: false
+    syncOptions:
+      - ServerSideApply=true
