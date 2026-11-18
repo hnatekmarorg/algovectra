@@ -581,6 +581,7 @@ metadata:
   name: pcp-api
   namespace: pcp-pooltechnika-prod
   annotations:
+    argocd.argoproj.io/sync-options: Prune=false
     pcp.algovectra.com/source-revision: aff846395b4df1f1353be5d9437238912116bb6f
 spec:
   replicas: 1
