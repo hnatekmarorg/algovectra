@@ -166,133 +166,6 @@ spec:
         - protocol: TCP
           port: 5432
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: pcp-api
-  namespace: pcp-staging
-  annotations:
-    pcp.algovectra.com/source-revision: d9765ee6a9c0cc3003aa0b19a696fece86cf17bf
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: pcp-api
-  template:
-    metadata:
-      labels:
-        app: pcp-api
-    spec:
-      automountServiceAccountToken: false
-      nodeSelector:
-        kubernetes.io/arch: amd64
-      imagePullSecrets:
-        - name: pcp-registry
-      initContainers:
-        - name: wait-for-postgres
-          image: docker.io/library/postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
-          command:
-            - sh
-            - -ec
-            - |
-              until pg_isready -h pcp-db -U pcp -d pcp; do
-                sleep 2
-              done
-          resources:
-            requests:
-              cpu: 25m
-              memory: 32Mi
-            limits:
-              memory: 64Mi
-      containers:
-        - name: api
-          image: ghcr.io/algovectra/pcp-api@sha256:e2be10f2ebac8821b34b177a64dec9bc94bfe8beccbe1d3ac543a0d7c03f45f3
-          ports:
-            - name: http
-              containerPort: 3000
-          env:
-            - name: NODE_ENV
-              value: production
-            - name: PORT
-              value: "3000"
-            - name: SEED_DEMOS
-              value: "1"
-            - name: PARTNER_SMTP_ENABLED
-              value: "0"
-            - name: CORS_ORIGINS
-              value: https://pcp-staging.algovectra.com
-            - name: WORKOS_REDIRECT_URI
-              value: https://pcp-staging.algovectra.com/auth/callback
-            - name: PUBLIC_CONFIGURATOR_URL
-              value: https://pcp-staging.algovectra.com
-            - name: TENANT_REPOS_DIR
-              value: /var/data/tenants
-            # Use a URL-safe password, such as randomly generated hex.
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: pcp-database
-                  key: POSTGRES_PASSWORD
-            - name: DATABASE_URL
-              value: postgresql://pcp:$(POSTGRES_PASSWORD)@pcp-db:5432/pcp
-            - name: WORKOS_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: pcp-api
-                  key: WORKOS_API_KEY
-            - name: WORKOS_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: pcp-api
-                  key: WORKOS_CLIENT_ID
-            - name: WORKOS_COOKIE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: pcp-api
-                  key: WORKOS_COOKIE_PASSWORD
-            - name: ADMIN_ALLOWLIST_EMAILS
-              valueFrom:
-                secretKeyRef:
-                  name: pcp-api
-                  key: ADMIN_ALLOWLIST_EMAILS
-            - name: WORKOS_ISSUER
-              valueFrom:
-                secretKeyRef:
-                  name: pcp-api
-                  key: WORKOS_ISSUER
-                  optional: true
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              memory: 1Gi
-          startupProbe:
-            httpGet:
-              path: /health
-              port: http
-            periodSeconds: 5
-            failureThreshold: 60
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
-            periodSeconds: 5
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            periodSeconds: 15
-          volumeMounts:
-            - name: tenant-repos
-              mountPath: /var/data/tenants
-      volumes:
-        - name: tenant-repos
-          persistentVolumeClaim:
-            claimName: pcp-tenant-repos
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -301,6 +174,19 @@ metadata:
 spec:
   selector:
     app: pcp-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcp-web
+  namespace: pcp-staging
+spec:
+  selector:
+    app: pcp-web
   ports:
     - name: http
       port: 80
@@ -326,6 +212,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: pcp-api
+                name: pcp-web
                 port:
                   name: http
