@@ -1,0 +1,67 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pcp-staging-release-registry
+  namespace: argocd
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: local-algovectra
+  target:
+    name: pcp-staging-release-registry
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      metadata:
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      data:
+        type: oci
+        project: pcp-staging-release
+        url: oci://ghcr.io/algovectra/pcp-api
+        username: '{{ $entry := index ((fromJson .config).auths) "ghcr.io" }}{{ index (splitList ":" ($entry.auth | b64dec)) 0 }}'
+        password: '{{ $entry := index ((fromJson .config).auths) "ghcr.io" }}{{ index (splitList ":" ($entry.auth | b64dec)) 1 }}'
+  data:
+    - secretKey: config
+      remoteRef:
+        key: pcp-staging/registry
+        property: .dockerconfigjson
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: pcp-staging-release
+  namespace: argocd
+spec:
+  sourceRepos:
+    - oci://ghcr.io/algovectra/pcp-api
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: pcp-staging
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pcp-staging-release
+  namespace: argocd
+spec:
+  project: pcp-staging-release
+  source:
+    repoURL: oci://ghcr.io/algovectra/pcp-api
+    targetRevision: staging-manifests
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pcp-staging
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
