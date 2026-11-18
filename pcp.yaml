@@ -31,6 +31,8 @@ kind: ExternalSecret
 metadata:
   name: pcp-api
   namespace: pcp-staging
+  annotations:
+    force-sync: pcp-staging-workos-issuer-v2
 spec:
   refreshInterval: 1h
   secretStoreRef:
