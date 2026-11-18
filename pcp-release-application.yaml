@@ -60,6 +60,8 @@ spec:
     namespace: pcp-pooltechnika-prod
   syncPolicy:
     automated:
-      enabled: false
+      enabled: true
+      prune: false
+      selfHeal: true
     syncOptions:
       - ServerSideApply=true
