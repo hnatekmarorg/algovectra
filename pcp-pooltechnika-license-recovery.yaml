@@ -1,7 +1,7 @@
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: pcp-license-recovery-20261118-v3
+  name: pcp-license-recovery-20261118-v4
   namespace: pcp-pooltechnika-prod
 spec:
   refreshPolicy: CreatedOnce
@@ -9,7 +9,7 @@ spec:
     kind: ClusterSecretStore
     name: local-algovectra
   target:
-    name: pcp-license-recovery-20261118-v3
+    name: pcp-license-recovery-20261118-v4
     creationPolicy: Owner
   data:
     - secretKey: payload
@@ -20,7 +20,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: pcp-license-recovery-20261118-v3
+  name: pcp-license-recovery-20261118-v4
   namespace: pcp-pooltechnika-prod
 data:
   merge.sql: |
@@ -46,11 +46,28 @@ data:
       public.partner_device_challenges, public.partner_tokens
       IN SHARE ROW EXCLUSIVE MODE;
 
+    CREATE TEMP TABLE recovery_identity_matches ON COMMIT DROP AS
+    SELECT source.id AS source_id, target.id AS target_id,
+      lower(source.email) IS DISTINCT FROM lower(target.email) AS email_differs,
+      (source.workos_user_id IS NOT NULL AND target.workos_user_id IS NOT NULL
+        AND source.workos_user_id <> target.workos_user_id) AS workos_differs,
+      (source.firebase_uid IS NOT NULL AND target.firebase_uid IS NOT NULL
+        AND source.firebase_uid <> target.firebase_uid) AS legacy_identity_differs,
+      (source.access_blocked AND NOT target.access_blocked) AS would_unblock
+    FROM recovery_users source
+    JOIN public.users target ON source.id = target.id OR lower(source.email) = lower(target.email)
+      OR source.workos_user_id = target.workos_user_id OR source.firebase_uid = target.firebase_uid;
+
+    CREATE TEMP TABLE recovery_identity_map ON COMMIT DROP AS
+    SELECT source.id AS source_id, coalesce(m.target_id, source.id) AS target_id
+    FROM recovery_users source LEFT JOIN recovery_identity_matches m ON m.source_id=source.id;
+
     DO $recovery$
     DECLARE
       source jsonb;
       tenant uuid := 'b06e4929-7ad3-418e-9c3a-3b1f70f165b9';
       relation text;
+      identity_field text;
       entries jsonb;
       added integer;
       missing integer;
@@ -75,24 +92,26 @@ data:
         RAISE EXCEPTION 'A post-cutover access or removal event requires reconciliation';
       END IF;
 
-      IF EXISTS (SELECT 1 FROM recovery_users s JOIN public.users t USING (id)
-          WHERE lower(s.email) IS DISTINCT FROM lower(t.email)
-             OR (s.workos_user_id IS NOT NULL AND t.workos_user_id IS NOT NULL
-                 AND s.workos_user_id <> t.workos_user_id)
-             OR (s.access_blocked AND NOT t.access_blocked))
-        OR EXISTS (SELECT 1 FROM recovery_users s JOIN public.users t
-             ON lower(s.email)=lower(t.email)
-             OR s.workos_user_id=t.workos_user_id OR s.firebase_uid=t.firebase_uid
-          WHERE s.id <> t.id) THEN
-        RAISE EXCEPTION 'Source and target account identity conflict';
+      IF EXISTS (SELECT 1 FROM recovery_identity_matches WHERE email_differs OR workos_differs
+        OR (legacy_identity_differs AND source_id<>target_id) OR would_unblock)
+        OR EXISTS (SELECT 1 FROM recovery_identity_map GROUP BY source_id HAVING count(*)<>1)
+        OR EXISTS (SELECT 1 FROM recovery_identity_map GROUP BY target_id HAVING count(*)<>1) THEN
+        RAISE EXCEPTION 'Unsafe account mapping (email=%, WorkOS=%, legacy=%, blocked=%)',
+          (SELECT count(*) FROM recovery_identity_matches WHERE email_differs),
+          (SELECT count(*) FROM recovery_identity_matches WHERE workos_differs),
+          (SELECT count(*) FROM recovery_identity_matches WHERE legacy_identity_differs),
+          (SELECT count(*) FROM recovery_identity_matches WHERE would_unblock);
       END IF;
 
-      INSERT INTO public.users SELECT * FROM recovery_users ON CONFLICT DO NOTHING;
+      INSERT INTO public.users SELECT s.* FROM recovery_users s
+      JOIN recovery_identity_map m ON m.source_id=s.id AND m.source_id=m.target_id
+      ON CONFLICT DO NOTHING;
       GET DIAGNOSTICS added = ROW_COUNT;
-      IF EXISTS (SELECT 1 FROM recovery_users s WHERE NOT EXISTS (SELECT 1 FROM public.users t WHERE t.id=s.id)) THEN
+      IF EXISTS (SELECT 1 FROM recovery_identity_map m WHERE NOT EXISTS (SELECT 1 FROM public.users t WHERE t.id=m.target_id)) THEN
         RAISE EXCEPTION 'A linked account could not be reconciled';
       END IF;
-      RAISE NOTICE 'recovery users added=%', added;
+      RAISE NOTICE 'recovery users added=% relinked=%', added,
+        (SELECT count(*) FROM recovery_identity_map WHERE source_id<>target_id);
 
       FOREACH relation IN ARRAY ARRAY[
         'user_roles','user_access_events','partner_companies','partner_seats',
@@ -109,6 +128,13 @@ data:
         ) THEN
           RAISE EXCEPTION 'Unsafe tenant scope for %', relation;
         END IF;
+        FOREACH identity_field IN ARRAY ARRAY['user_id','actor_id'] LOOP
+          SELECT coalesce(jsonb_agg(CASE WHEN m.target_id IS NULL THEN item
+            ELSE jsonb_set(item,ARRAY[identity_field],to_jsonb(m.target_id)) END),'[]'::jsonb)
+          INTO entries
+          FROM jsonb_array_elements(entries) AS item
+          LEFT JOIN recovery_identity_map m ON m.source_id::text=item->>identity_field;
+        END LOOP;
         EXECUTE format('INSERT INTO public.%1$I OVERRIDING SYSTEM VALUE
                        SELECT * FROM jsonb_populate_recordset(NULL::public.%1$I, $1)
                        ON CONFLICT DO NOTHING',relation) USING entries;
@@ -150,15 +176,15 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              pcp.algovectra.com/maintenance: pcp-license-recovery-20261118-v3
-              batch.kubernetes.io/job-name: pcp-license-recovery-20261118-v3
+              pcp.algovectra.com/maintenance: pcp-license-recovery-20261118-v4
+              batch.kubernetes.io/job-name: pcp-license-recovery-20261118-v4
       ports:
         - {protocol: TCP, port: 5432}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pcp-license-recovery-20261118-v3
+  name: pcp-license-recovery-20261118-v4
   namespace: pcp-pooltechnika-prod
 spec:
   backoffLimit: 0
@@ -166,7 +192,7 @@ spec:
   template:
     metadata:
       labels:
-        pcp.algovectra.com/maintenance: pcp-license-recovery-20261118-v3
+        pcp.algovectra.com/maintenance: pcp-license-recovery-20261118-v4
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -224,10 +250,10 @@ spec:
       volumes:
         - name: export
           secret:
-            secretName: pcp-license-recovery-20261118-v3
+            secretName: pcp-license-recovery-20261118-v4
             defaultMode: 0440
         - name: sql
           configMap:
-            name: pcp-license-recovery-20261118-v3
+            name: pcp-license-recovery-20261118-v4
         - name: scratch
           emptyDir: {medium: Memory, sizeLimit: 8Mi}
